@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Código8 – Event Check-in Manager
  * Plugin URI: https://codigo8.com/download/event-checkin-manager/
- * Description: Gestión de invitados, importador/exportador CSV, taxonomía Evento, check-in por QR con AJAX, registro del usuario que hizo el check-in y observaciones. v2.0.0
- * Version: 2.0.0
+ * Description: Sistema completo de gestión de invitados con check-in/check-out por QR, múltiples eventos, importación/exportación CSV y control de acceso por roles. v2.1.1
+ * Version: 2.1.1
  * Author: Código8
  * Author URI: https://codigo8.com
  * License: GPLv2 or later
@@ -15,47 +15,80 @@ if (!defined('ABSPATH')) exit;
 /* -----------------------
    1. CPT 'invitado' (solo admins)
    ----------------------- */
-add_action('init', function(){
-    $labels = [
-        'name' => 'Invitados',
-        'singular_name' => 'Invitado',
-        'add_new' => 'Agregar Invitado',
-        'add_new_item' => 'Agregar Invitado',
-        'edit_item' => 'Editar Invitado',
-    ];
+add_action('init', 'c8ecm_register_invitados_cpt');
+function c8ecm_register_invitados_cpt() {
+    $labels = array(
+        'name'               => 'Invitados',
+        'singular_name'      => 'Invitado',
+        'menu_name'          => 'Invitados',
+        'name_admin_bar'     => 'Invitado',
+        'add_new'            => 'Añadir nuevo',
+        'add_new_item'       => 'Añadir nuevo invitado',
+        'new_item'           => 'Nuevo invitado',
+        'edit_item'          => 'Editar invitado',
+        'view_item'          => 'Ver invitado',
+        'all_items'          => 'Todos los invitados',
+        'search_items'       => 'Buscar invitados',
+        'not_found'          => 'No se encontraron invitados',
+        'not_found_in_trash' => 'No hay invitados en la papelera',
+    );
 
-    register_post_type('invitado', [
-        'labels' => $labels,
-        'public' => false,
-        'show_ui' => true,
-        'show_in_menu' => true,
-        'menu_position' => 20,
-        'menu_icon' => 'dashicons-tickets-alt',
-        'supports' => ['title'],
-        'capability_type' => 'post',
-        'capabilities' => [
-            'publish_posts' => 'manage_options',
-            'edit_posts' => 'manage_options',
-            'edit_others_posts' => 'manage_options',
-            'delete_posts' => 'manage_options',
-            'delete_others_posts' => 'manage_options',
-            'read_private_posts' => 'manage_options',
-            'edit_post' => 'manage_options',
-            'delete_post' => 'manage_options',
-            'read_post' => 'manage_options',
-            'create_posts' => 'manage_options',
-        ],
-        'map_meta_cap' => true,
-    ]);
+    $args = array(
+        'labels'             => $labels,
+        'public'             => false,
+        'show_ui'            => true,
+        'show_in_menu'       => current_user_can('administrator') ? true : false,
+        'menu_position'      => 6,
+        'menu_icon'          => 'dashicons-tickets',
+        'supports'           => array('title', 'custom-fields'),
+        'capability_type'    => 'invitado',
+        'map_meta_cap'       => false,
+        'capabilities' => array(
+            'edit_post'              => 'administrator',
+            'read_post'              => 'administrator',
+            'delete_post'            => 'administrator',
+            'edit_posts'             => 'administrator',
+            'edit_others_posts'      => 'administrator',
+            'delete_posts'           => 'administrator',
+            'publish_posts'          => 'administrator',
+            'read_private_posts'     => 'administrator',
+        ),
+    );
 
-    register_taxonomy('evento', 'invitado', [
-        'labels' => ['name'=>'Eventos','singular_name'=>'Evento'],
-        'public' => true,
-        'show_ui' => true,
+    register_post_type('invitado', $args);
+}
+
+/* -----------------------
+   Registrar taxonomía "evento"
+   ----------------------- */
+add_action('init', 'c8ecm_register_evento_taxonomy');
+function c8ecm_register_evento_taxonomy() {
+    $labels = array(
+        'name'              => 'Eventos',
+        'singular_name'     => 'Evento',
+        'search_items'      => 'Buscar Eventos',
+        'all_items'         => 'Todos los Eventos',
+        'parent_item'       => 'Evento Padre',
+        'parent_item_colon' => 'Evento Padre:',
+        'edit_item'         => 'Editar Evento',
+        'update_item'       => 'Actualizar Evento',
+        'add_new_item'      => 'Añadir Nuevo Evento',
+        'new_item_name'     => 'Nombre del Nuevo Evento',
+        'menu_name'         => 'Eventos',
+    );
+
+    $args = array(
+        'hierarchical'      => false,
+        'labels'            => $labels,
+        'show_ui'           => true,
         'show_admin_column' => true,
-        'hierarchical' => false,
-    ]);
-});
+        'query_var'         => true,
+        'rewrite'           => array('slug' => 'evento'),
+        'show_in_rest'      => true,
+    );
+
+    register_taxonomy('evento', array('invitado'), $args);
+}
 
 /* -----------------------
    2. Metabox: datos del invitado
@@ -73,69 +106,114 @@ function c8_render_metabox($post){
     $check = get_post_meta($post->ID, 'c8_checkin', true);
     $check_by = get_post_meta($post->ID, 'c8_checkin_by', true);
     $check_at = get_post_meta($post->ID, 'c8_checkin_at', true);
-    $evento_terms = get_the_terms($post->ID, 'evento');
-    $evento = ($evento_terms && !is_wp_error($evento_terms)) ? $evento_terms[0]->name : '';
+    
+    // Obtener eventos existentes para el dropdown
+    $eventos = get_terms(array(
+        'taxonomy' => 'evento',
+        'hide_empty' => false,
+        'orderby' => 'name',
+        'order' => 'ASC'
+    ));
+    
+    // Obtener el evento actual del invitado
+    $evento_actual = '';
+    $evento_terms = c8ecm_get_evento_terms($post->ID);
+    if ($evento_terms) {
+        $evento_actual = $evento_terms[0]->term_id;
+    }
     ?>
-    <p>
-      <label><strong>Nombre completo</strong><br>
-      <input class="c8-field-nombre" type="text" name="c8_nombre" value="<?php echo esc_attr($nombre); ?>" style="width:100%"></label>
-    </p>
-    <p>
-      <label><strong>Organización</strong><br>
-      <input class="c8-field-organizacion" type="text" name="c8_organizacion" value="<?php echo esc_attr($org); ?>" style="width:100%"></label>
-    </p>
-    <p>
-      <label><strong>Mesa asignada</strong><br>
-      <input class="c8-field-mesa" type="text" name="c8_mesa" value="<?php echo esc_attr($mesa); ?>" style="width:100%"></label>
-    </p>
-    <p>
-      <label><strong>Evento</strong> <em>(nombre / slug)</em><br>
-      <input class="c8-field-evento" type="text" name="c8_evento" value="<?php echo esc_attr($evento); ?>" style="width:100%"></label>
-      <br><small>Si el término no existe se creará al guardar.</small>
-    </p>
-    <p>
-      <label><strong>Observaciones (privadas)</strong><br>
-      <textarea class="c8-field-observaciones" name="c8_observaciones" rows="3" style="width:100%"><?php echo esc_textarea($observ); ?></textarea></label>
-    </p>
-    <p>
-      <strong>Estado check-in:</strong>
-      <?php if($check): ?>
-          <span style="color:green">Ingresado</span> — <?php echo esc_html($check_at); ?> <?php if($check_by) echo '('.esc_html($check_by).')'; ?>
-      <?php else: ?>
-          <span style="color:orange">Pendiente</span>
-      <?php endif; ?>
-    </p>
+    <style>
+    .c8-metabox-field { margin-bottom: 15px; }
+    .c8-metabox-field label { display: block; margin-bottom: 5px; font-weight: bold; }
+    .c8-metabox-field input[type="text"],
+    .c8-metabox-field textarea,
+    .c8-metabox-field select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+    .c8-checkin-status { padding: 10px; background: #f9f9f9; border-radius: 4px; }
+    </style>
+
+    <div class="c8-metabox-field">
+        <label for="c8_nombre"><strong>Nombre completo</strong></label>
+        <input type="text" id="c8_nombre" name="c8_nombre" value="<?php echo esc_attr($nombre); ?>">
+    </div>
+
+    <div class="c8-metabox-field">
+        <label for="c8_organizacion"><strong>Organización</strong></label>
+        <input type="text" id="c8_organizacion" name="c8_organizacion" value="<?php echo esc_attr($org); ?>">
+    </div>
+
+    <div class="c8-metabox-field">
+        <label for="c8_mesa"><strong>Mesa asignada</strong></label>
+        <input type="text" id="c8_mesa" name="c8_mesa" value="<?php echo esc_attr($mesa); ?>">
+    </div>
+
+    <div class="c8-metabox-field">
+        <label for="c8_evento"><strong>Evento</strong></label>
+        <select id="c8_evento" name="c8_evento" style="width: 100%">
+            <option value="">-- Seleccionar evento --</option>
+            <?php foreach($eventos as $evento): ?>
+                <option value="<?php echo esc_attr($evento->term_id); ?>" <?php selected($evento_actual, $evento->term_id); ?>>
+                    <?php echo esc_html($evento->name); ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        <p><small>Selecciona un evento existente. Si no existe, créalo primero en la pestaña "Eventos".</small></p>
+    </div>
+
+    <div class="c8-metabox-field">
+        <label for="c8_observaciones"><strong>Observaciones (privadas)</strong></label>
+        <textarea id="c8_observaciones" name="c8_observaciones" rows="3"><?php echo esc_textarea($observ); ?></textarea>
+    </div>
+
+    <div class="c8-checkin-status">
+        <strong>Estado check-in:</strong>
+        <?php if($check): ?>
+            <span style="color:green">✅ Ingresado</span> — <?php echo esc_html($check_at); ?> 
+            <?php if($check_by) echo '('.esc_html($check_by).')'; ?>
+            
+            <?php 
+            $checkout = get_post_meta($post->ID, 'c8_checkout', true);
+            $checkout_at = get_post_meta($post->ID, 'c8_checkout_at', true);
+            $checkout_by = get_post_meta($post->ID, 'c8_checkout_by', true);
+            ?>
+            <?php if($checkout): ?>
+                <br><strong>Estado check-out:</strong>
+                <span style="color:blue">🚪 Salió</span> — <?php echo esc_html($checkout_at); ?>
+                <?php if($checkout_by) echo '('.esc_html($checkout_by).')'; ?>
+            <?php endif; ?>
+            
+        <?php else: ?>
+            <span style="color:orange">⏳ Pendiente</span>
+        <?php endif; ?>
+    </div>
     <?php
 }
 
-add_action('save_post_invitado', function($post_id){
+add_action('save_post_invitado', function($post_id) {
     if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
     if (!isset($_POST['c8_nonce']) || !wp_verify_nonce($_POST['c8_nonce'], 'c8_save_invitado')) return;
     if (!current_user_can('manage_options')) return;
 
-    $nombre = isset($_POST['c8_nombre']) ? sanitize_text_field($_POST['c8_nombre']) : '';
-    $org = isset($_POST['c8_organizacion']) ? sanitize_text_field($_POST['c8_organizacion']) : '';
-    $mesa = isset($_POST['c8_mesa']) ? sanitize_text_field($_POST['c8_mesa']) : '';
-    $observ = isset($_POST['c8_observaciones']) ? sanitize_textarea_field($_POST['c8_observaciones']) : '';
-    $evento = isset($_POST['c8_evento']) ? sanitize_text_field($_POST['c8_evento']) : '';
+    $nombre  = isset($_POST['c8_nombre']) ? sanitize_text_field($_POST['c8_nombre']) : '';
+    $org     = isset($_POST['c8_organizacion']) ? sanitize_text_field($_POST['c8_organizacion']) : '';
+    $mesa    = isset($_POST['c8_mesa']) ? sanitize_text_field($_POST['c8_mesa']) : '';
+    $observ  = isset($_POST['c8_observaciones']) ? sanitize_textarea_field($_POST['c8_observaciones']) : '';
+    $evento  = isset($_POST['c8_evento']) ? intval($_POST['c8_evento']) : '';
 
+    // Obtener el título del post
+    $titulo = get_the_title($post_id);
+
+    update_post_meta($post_id, 'c8_ticket', $titulo);
     update_post_meta($post_id, 'c8_nombre', $nombre);
     update_post_meta($post_id, 'c8_organizacion', $org);
     update_post_meta($post_id, 'c8_mesa', $mesa);
     update_post_meta($post_id, 'c8_observaciones', $observ);
 
-    // asignar taxonomía evento (crear si no existe)
-    if ($evento) {
-        $term = term_exists($evento, 'evento');
-        if (!$term) {
-            $term = wp_insert_term($evento, 'evento');
-        }
-        if (!is_wp_error($term)) {
-            $term_id = is_array($term) ? $term['term_id'] : $term;
-            wp_set_object_terms($post_id, intval($term_id), 'evento', false);
-        }
+    // Asignar evento solo si se seleccionó uno válido
+    if (!empty($evento)) {
+        wp_set_object_terms($post_id, intval($evento), 'evento', false);
     } else {
-        wp_set_object_terms($post_id, [], 'evento', false);
+        // Si no hay evento seleccionado, eliminar cualquier término asignado
+        wp_set_object_terms($post_id, null, 'evento');
     }
 });
 
@@ -179,17 +257,22 @@ add_action('restrict_manage_posts', function(){
     global $typenow;
     if ($typenow !== 'invitado') return;
 
-    // Evento taxonomy
+    // Evento taxonomy - CORREGIDO
     $taxonomy = 'evento';
     $selected = isset($_GET[$taxonomy]) ? $_GET[$taxonomy] : '';
-    wp_dropdown_categories([
+    
+    $dropdown_args = array(
         'show_option_all' => 'Todos los eventos',
-        'taxonomy' => $taxonomy,
-        'name' => $taxonomy,
-        'selected' => $selected,
-        'orderby' => 'name',
-        'hide_empty' => false,
-    ]);
+        'taxonomy'        => $taxonomy,
+        'name'            => $taxonomy,
+        'selected'        => $selected,
+        'value_field'     => 'slug', // Usar slug en lugar de ID
+        'orderby'         => 'name',
+        'hide_empty'      => false,
+        'hierarchical'    => true,
+    );
+    
+    wp_dropdown_categories($dropdown_args);
 
     // organización
     $org_val = isset($_GET['c8_organizacion']) ? esc_attr($_GET['c8_organizacion']) : '';
@@ -216,8 +299,8 @@ add_action('pre_get_posts', function($query){
     if (!empty($_GET['evento'])) {
         $query->set('tax_query', [[
             'taxonomy' => 'evento',
-            'field' => 'id',
-            'terms' => intval($_GET['evento']),
+            'field' => 'slug', // Cambiado de 'id' a 'slug'
+            'terms' => sanitize_text_field($_GET['evento']),
         ]]);
     }
 
@@ -264,12 +347,19 @@ add_filter('posts_search', function($search, $q){
    - URL: /evento-2025/?ticket=123
    ----------------------- */
 add_shortcode('c8ecm_checkin', function($atts){
+    $atts = shortcode_atts(array(
+        'event' => ''
+    ), $atts);
+    
     $ticket = isset($_GET['ticket']) ? sanitize_text_field($_GET['ticket']) : '';
     if (!$ticket) return '<p>No se especificó ticket.</p>';
 
-    // determine event slug from current page slug if exists
-    global $post;
-    $event_slug = $post ? $post->post_name : '';
+    // Determinar evento desde parámetro shortcode o slug de página
+    $event_slug = !empty($atts['event']) ? $atts['event'] : '';
+    if (!$event_slug) {
+        global $post;
+        $event_slug = $post ? $post->post_name : '';
+    }
 
     $args = ['post_type'=>'invitado','title'=>$ticket,'numberposts'=>1];
     if ($event_slug) {
@@ -287,15 +377,34 @@ add_shortcode('c8ecm_checkin', function($atts){
     $check_at = get_post_meta($inv->ID,'c8_checkin_at',true);
     $check_by = get_post_meta($inv->ID,'c8_checkin_by',true);
     $observ = get_post_meta($inv->ID,'c8_observaciones_checkin',true);
+    $checkout = get_post_meta($inv->ID,'c8_checkout',true);
+    $checkout_at = get_post_meta($inv->ID,'c8_checkout_at',true);
+    $checkout_by = get_post_meta($inv->ID,'c8_checkout_by',true);
 
     ob_start();
     ?>
     <style>
-    .c8c_wrapper{font-family:system-ui,Arial,sans-serif;padding:16px;max-width:420px;margin:0 auto;text-align:center;}
-    .c8c_field {margin:8px 0;font-size:1.05rem;}
-    .c8c_btn{background:#2d89ef;color:#fff;border:0;border-radius:10px;padding:12px 14px;font-size:1.05rem;width:100%;cursor:pointer;}
-    .c8c_btn.disabled{opacity:.6;cursor:not-allowed;}
-    .c8c_obs textarea{width:100%;min-height:80px;border-radius:6px;border:1px solid #ddd;padding:8px;}
+    .c8-list-wrap{max-width:1000px;margin:0 auto;font-family:system-ui,Arial,sans-serif;}
+    .c8-list-controls{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
+    .c8-list-table{width:100%;border-collapse:collapse;}
+    .c8-list-table th, .c8-list-table td{padding:8px;border-bottom:1px solid #eee;text-align:left;}
+    .c8-list-btn{padding:6px 10px;border-radius:6px;border:0;background:#2d89ef;color:#fff;cursor:pointer;}
+    .c8-list-btn.green{background:#4caf50;}
+    .c8-filter-input{padding:6px;border:1px solid #ddd;border-radius:6px;}
+    
+    /* Estilos para filas clickeables */
+    .c8-clickable-row:hover { background-color: #f5f5f5; }
+    .c8-clickable-row:active { background-color: #e9e9e9; }
+    .c8-clickable-row td:first-child { position: relative; }
+    .c8-clickable-row td:first-child::after {
+        content: "🔗";
+        position: absolute;
+        right: 5px;
+        top: 50%;
+        transform: translateY(-50%);
+        opacity: 0.5;
+        font-size: 12px;
+    }
     </style>
 
     <div class="c8c_wrapper">
@@ -305,68 +414,118 @@ add_shortcode('c8ecm_checkin', function($atts){
       <p class="c8-field-evento c8c_field"><strong>Evento:</strong> <?php echo esc_html($event_slug); ?></p>
 
       <?php if ($check): ?>
-        <p style="color:green;font-weight:700;">✅ Ingresó: <?php echo esc_html($check_at); ?> <?php if($check_by) echo '('.esc_html($check_by).')'; ?></p>
-        <?php if($observ): ?><p class="c8-field-observaciones"><strong>Observaciones:</strong><br><?php echo nl2br(esc_html($observ)); ?></p><?php endif; ?>
+        <?php if($checkout): ?>
+          <p style="color:blue;font-weight:700;">🚪 Salió: <?php echo esc_html($checkout_at); ?></p>
+          <?php if($checkout_by): ?>
+            <p style="color:#666;font-size:0.9em;">Registrado por: <?php echo esc_html($checkout_by); ?></p>
+          <?php endif; ?>
+          <button class="c8c_btn checkin_again" id="c8c_btn_checkin_again" data-postid="<?php echo esc_attr($inv->ID); ?>">
+            🔄 Volver a ingresar
+          </button>
+        <?php else: ?>
+          <p style="color:green;font-weight:700;">✅ Ingresó: <?php echo esc_html($check_at); ?></p>
+          <?php if($check_by): ?>
+            <p style="color:#666;font-size:0.9em;">Registrado por: <?php echo esc_html($check_by); ?></p>
+          <?php endif; ?>
+          <button class="c8c_btn checkout" id="c8c_btn_checkout" data-postid="<?php echo esc_attr($inv->ID); ?>">
+            🚪 Registrar salida
+          </button>
+        <?php endif; ?>
+        
+        <?php if($observ): ?>
+          <p class="c8-field-observaciones"><strong>Observaciones:</strong><br><?php echo nl2br(esc_html($observ)); ?></p>
+        <?php endif; ?>
+        
       <?php else: ?>
         <div class="c8c_obs c8-field-observaciones">
-          <label for="c8_obs"><?php _e('Observaciones (opcional)'); ?></label>
+          <label for="c8_obs"><?php _e('Observaciones'); ?></label>
           <textarea id="c8_obs" placeholder="Ej: alergia, silla extra..."></textarea>
         </div>
         <button class="c8c_btn" id="c8c_btn" data-postid="<?php echo esc_attr($inv->ID); ?>">
           ✅ Marcar ingreso
         </button>
-        <p id="c8c_msg" style="margin-top:10px;display:none;"></p>
+      <?php endif; ?>
+      
+      <p id="c8c_msg" style="margin-top:10px;display:none;"></p>
+    </div>
 
-        <script>
-        (function(){
-            const btn = document.getElementById('c8c_btn');
-            const msg = document.getElementById('c8c_msg');
-            btn.addEventListener('click', function(){
-                if(!confirm('Confirmar check-in para <?php echo esc_js($nombre ?: $inv->post_title); ?>?')) return;
-                btn.disabled = true;
-                btn.classList.add('disabled');
-                btn.textContent = 'Procesando...';
-                const postId = btn.dataset.postid;
-                const observ = document.getElementById('c8_obs').value;
-                const data = new URLSearchParams();
-                data.append('action','c8ecm_checkin_ajax');
-                data.append('post_id', postId);
-                data.append('observ', observ);
-                data.append('nonce', '<?php echo wp_create_nonce('c8ecm_checkin_nonce'); ?>');
+    <script>
+    (function(){
+        const msg = document.getElementById('c8c_msg');
+        
+        function handleAction(btn, action, confirmText) {
+            if(!confirm(confirmText)) return;
+            btn.disabled = true;
+            btn.classList.add('disabled');
+            btn.textContent = 'Procesando...';
+            const postId = btn.dataset.postid;
+            const observ = document.getElementById('c8_obs') ? document.getElementById('c8_obs').value : '';
+            const data = new URLSearchParams();
+            data.append('action','c8ecm_checkin_ajax');
+            data.append('post_id', postId);
+            data.append('observ', observ);
+            data.append('check_action', action);
+            data.append('nonce', '<?php echo wp_create_nonce('c8ecm_checkin_nonce'); ?>');
 
-                fetch('<?php echo admin_url('admin-ajax.php'); ?>', {
-                    method:'POST',
-                    credentials:'same-origin',
-                    headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},
-                    body: data.toString()
-                }).then(r=>r.json()).then(res=>{
-                    if(res.success){
-                        msg.style.display='block';
-                        msg.style.color='green';
-                        msg.innerText = res.data.message;
-                        btn.style.display='none';
-                        document.getElementById('c8_obs').style.display='none';
-                    } else {
-                        msg.style.display='block';
-                        msg.style.color='red';
-                        msg.innerText = 'Error: ' + (res.data ? res.data : 'Error');
-                        btn.disabled = false;
-                        btn.classList.remove('disabled');
-                        btn.textContent = '✅ Marcar ingreso';
-                    }
-                }).catch(e=>{
+            fetch('<?php echo admin_url('admin-ajax.php'); ?>', {
+                method:'POST',
+                credentials:'same-origin',
+                headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},
+                body: data.toString()
+            }).then(r=>r.json()).then(res=>{
+                if(res.success){
+                    location.reload();
+                } else {
                     msg.style.display='block';
                     msg.style.color='red';
-                    msg.innerText = 'Error de red';
+                    msg.innerText = 'Error: ' + (res.data ? res.data : 'Error');
                     btn.disabled = false;
                     btn.classList.remove('disabled');
-                    btn.textContent = '✅ Marcar ingreso';
-                });
+                    btn.textContent = getButtonText(action);
+                }
+            }).catch(e=>{
+                msg.style.display='block';
+                msg.style.color='red';
+                msg.innerText = 'Error de red';
+                btn.disabled = false;
+                btn.classList.remove('disabled');
+                btn.textContent = getButtonText(action);
             });
-        })();
-        </script>
-      <?php endif; ?>
-    </div>
+        }
+
+        function getButtonText(action) {
+            switch(action) {
+                case 'checkin': return '✅ Marcar ingreso';
+                case 'checkout': return '🚪 Registrar salida';
+                case 'checkin_again': return '🔄 Volver a ingresar';
+                default: return 'Acción';
+            }
+        }
+
+        // Asignar eventos a todos los botones posibles
+        const btnCheckin = document.getElementById('c8c_btn');
+        const btnCheckout = document.getElementById('c8c_btn_checkout');
+        const btnCheckinAgain = document.getElementById('c8c_btn_checkin_again');
+
+        if(btnCheckin) {
+            btnCheckin.addEventListener('click', function(){
+                handleAction(this, 'checkin', 'Confirmar check-in para <?php echo esc_js($nombre ?: $inv->post_title); ?>?');
+            });
+        }
+        
+        if(btnCheckout) {
+            btnCheckout.addEventListener('click', function(){
+                handleAction(this, 'checkout', 'Confirmar check-out para <?php echo esc_js($nombre ?: $inv->post_title); ?>?');
+            });
+        }
+        
+        if(btnCheckinAgain) {
+            btnCheckinAgain.addEventListener('click', function(){
+                handleAction(this, 'checkin_again', 'Confirmar re-ingreso para <?php echo esc_js($nombre ?: $inv->post_title); ?>?');
+            });
+        }
+    })();
+    </script>
     <?php
     return ob_get_clean();
 });
@@ -387,20 +546,55 @@ function c8ecm_checkin_ajax_handler() {
     $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
     if (!$post_id || get_post_type($post_id) !== 'invitado') wp_send_json_error('Ticket inválido');
 
-    $already = get_post_meta($post_id,'c8_checkin',true);
-    if ($already) wp_send_json_error('Invitado ya ingresado');
-
     $observ = isset($_POST['observ']) ? sanitize_textarea_field($_POST['observ']) : '';
+    $check_action = isset($_POST['check_action']) ? $_POST['check_action'] : 'checkin';
 
     $user = wp_get_current_user();
     $by = $user && $user->exists() ? ($user->display_name ?: $user->user_login) : 'anon@'.$_SERVER['REMOTE_ADDR'];
 
-    update_post_meta($post_id,'c8_checkin',1);
-    update_post_meta($post_id,'c8_checkin_at', current_time('Y-m-d H:i:s'));
-    update_post_meta($post_id,'c8_checkin_by', $by);
-    if ($observ) update_post_meta($post_id,'c8_observaciones_checkin', $observ);
+    $current_time = current_time('Y-m-d H:i:s');
+    
+    switch($check_action) {
+        case 'checkin':
+            $already = get_post_meta($post_id,'c8_checkin',true);
+            if ($already) wp_send_json_error('Invitado ya ingresado');
+            
+            update_post_meta($post_id,'c8_checkin',1);
+            update_post_meta($post_id,'c8_checkin_at', $current_time);
+            update_post_meta($post_id,'c8_checkin_by', $by);
+            // Limpiar checkout si existe
+            delete_post_meta($post_id,'c8_checkout');
+            delete_post_meta($post_id,'c8_checkout_at');
+            delete_post_meta($post_id,'c8_checkout_by');
+            if ($observ) update_post_meta($post_id,'c8_observaciones_checkin', $observ);
+            break;
+            
+        case 'checkout':
+            $checked_in = get_post_meta($post_id,'c8_checkin',true);
+            if (!$checked_in) wp_send_json_error('Invitado no ha ingresado');
+            
+            $already_checked_out = get_post_meta($post_id,'c8_checkout',true);
+            if ($already_checked_out) wp_send_json_error('Invitado ya salió');
+            
+            update_post_meta($post_id,'c8_checkout',1);
+            update_post_meta($post_id,'c8_checkout_at', $current_time);
+            update_post_meta($post_id,'c8_checkout_by', $by);
+            break;
+            
+        case 'checkin_again':
+            $checked_out = get_post_meta($post_id,'c8_checkout',true);
+            if (!$checked_out) wp_send_json_error('Invitado no ha salido');
+            
+            update_post_meta($post_id,'c8_checkin_at', $current_time);
+            update_post_meta($post_id,'c8_checkin_by', $by);
+            // Limpiar checkout para permitir re-ingreso
+            delete_post_meta($post_id,'c8_checkout');
+            delete_post_meta($post_id,'c8_checkout_at');
+            delete_post_meta($post_id,'c8_checkout_by');
+            break;
+    }
 
-    wp_send_json_success(['message' => 'Check-in registrado: ' . current_time('H:i')]);
+    wp_send_json_success(['message' => 'Operación completada: ' . $current_time]);
 }
 
 /* -----------------------
@@ -408,6 +602,10 @@ function c8ecm_checkin_ajax_handler() {
    - Public (useful for staff devices); Elementor display conditions can hide page if needed
    ----------------------- */
 add_shortcode('c8ecm_list', function($atts){
+    $atts = shortcode_atts(array(
+        'event' => ''
+    ), $atts);
+    
     ob_start();
     ?>
     <style>
@@ -418,75 +616,136 @@ add_shortcode('c8ecm_list', function($atts){
     .c8-list-btn{padding:6px 10px;border-radius:6px;border:0;background:#2d89ef;color:#fff;cursor:pointer;}
     .c8-list-btn.green{background:#4caf50;}
     .c8-filter-input{padding:6px;border:1px solid #ddd;border-radius:6px;}
+    
+    /* Estilos para filas clickeables */
+    .c8-clickable-row:hover { background-color: #f5f5f5; }
+    .c8-clickable-row:active { background-color: #e9e9e9; }
+    .c8-clickable-row td:first-child { position: relative; }
+    .c8-clickable-row td:first-child::after {
+        content: "🔗";
+        position: absolute;
+        right: 5px;
+        top: 50%;
+        transform: translateY(-50%);
+        opacity: 0.5;
+        font-size: 12px;
+    }
+    
+    /* Ocultar solo columna Evento en móviles */
+    @media (max-width: 768px) {
+        .c8-list-table th:nth-child(5),  /* Columna Evento en th */
+        .c8-list-table td:nth-child(5) {  /* Columna Evento en td */
+            display: none;
+        }
+        
+        /* Ajustar controles para móviles */
+        .c8-list-controls {
+            flex-direction: column;
+        }
+        
+        .c8-filter-input {
+            width: 100%;
+            margin-bottom: 5px;
+        }
+        
+        .c8-list-btn {
+            width: 100%;
+        }
+    }
     </style>
 
     <div class="c8-list-wrap">
       <div class="c8-list-controls">
-        <input class="c8-filter-input" id="c8_q" placeholder="Buscar por ticket, nombre, organización...">
-        <input class="c8-filter-input" id="c8_evento_filter" placeholder="Evento (slug)">
-        <input class="c8-filter-input" id="c8_organizacion_filter" placeholder="Organización">
-        <input class="c8-filter-input" id="c8_mesa_filter" placeholder="Mesa">
-        <button class="c8-list-btn" id="c8_refresh">Buscar</button>
-      </div>
+		 <input class="c8-filter-input" id="c8_q" placeholder="Buscar por ticket, nombre, organización">
+		 <input class="c8-filter-input" id="c8_mesa_filter" placeholder="Buscar por Mesa">
+		 <button class="c8-list-btn" id="c8_refresh">Buscar</button>
+	  </div>
       <div id="c8_list_results">Cargando...</div>
     </div>
 
     <script>
-    (function(){
-      const ajaxUrl = '<?php echo admin_url('admin-ajax.php'); ?>';
-      const results = document.getElementById('c8_list_results');
+(function(){
+  const ajaxUrl = '<?php echo admin_url('admin-ajax.php'); ?>';
+  const results = document.getElementById('c8_list_results');
+  const eventSlug = '<?php echo esc_js($atts['event']); ?>';
 
-      function loadList(){
-        const q = document.getElementById('c8_q').value;
-        const evento = document.getElementById('c8_evento_filter').value;
-        const org = document.getElementById('c8_organizacion_filter').value;
-        const mesa = document.getElementById('c8_mesa_filter').value;
-        results.innerHTML = 'Buscando...';
+  function loadList(){
+    const q = document.getElementById('c8_q').value;
+    const mesa = document.getElementById('c8_mesa_filter').value;
+    results.innerHTML = 'Buscando...';
+    const data = new URLSearchParams();
+    data.append('action','c8ecm_list_ajax');
+    data.append('q', q);
+    data.append('mesa', mesa);
+    data.append('evento', eventSlug); // ← Pasar el evento desde el shortcode
+    fetch(ajaxUrl, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:data.toString()})
+      .then(r=>r.text()).then(html=>{ 
+        results.innerHTML = html; 
+        attachHandlers(); 
+        attachRowHandlers();
+      })
+      .catch(()=> results.innerHTML = 'Error de red');
+  }
+
+  function attachHandlers(){
+    document.querySelectorAll('.c8-do-checkin').forEach(btn=>{
+      btn.addEventListener('click', function(e){
+        e.stopPropagation(); // Prevenir que el click se propague a la fila
+        const id = this.dataset.id;
+        if(!confirm('Confirmar check-in?')) return;
+        this.disabled = true;
+        this.textContent = 'Procesando...';
         const data = new URLSearchParams();
-        data.append('action','c8ecm_list_ajax');
-        data.append('q', q);
-        data.append('evento', evento);
-        data.append('organizacion', org);
-        data.append('mesa', mesa);
+        data.append('action','c8ecm_checkin_ajax');
+        data.append('post_id', id);
+        data.append('observ', '');
+        data.append('check_action', 'checkin');
+        data.append('nonce', '<?php echo wp_create_nonce('c8ecm_checkin_nonce'); ?>');
         fetch(ajaxUrl, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:data.toString()})
-          .then(r=>r.text()).then(html=>{ results.innerHTML = html; attachHandlers(); })
-          .catch(()=> results.innerHTML = 'Error de red');
-      }
-
-      document.getElementById('c8_refresh').addEventListener('click', loadList);
-      document.getElementById('c8_q').addEventListener('keyup', function(e){ if(e.key === 'Enter') loadList(); });
-
-      function attachHandlers(){
-        document.querySelectorAll('.c8-do-checkin').forEach(btn=>{
-          btn.addEventListener('click', function(){
-            const id = this.dataset.id;
-            if(!confirm('Confirmar check-in?')) return;
-            this.disabled = true;
-            this.textContent = 'Procesando...';
-            const data = new URLSearchParams();
-            data.append('action','c8ecm_checkin_ajax');
-            data.append('post_id', id);
-            data.append('observ', '');
-            data.append('nonce', '<?php echo wp_create_nonce('c8ecm_checkin_nonce'); ?>');
-            fetch(ajaxUrl, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:data.toString()})
-              .then(r=>r.json()).then(res=>{
-                if(res.success){
-                  btn.classList.add('green');
-                  btn.textContent = 'Ingresó';
-                } else {
-                  alert('Error: ' + (res.data || ''));
-                  btn.disabled = false;
-                  btn.textContent = 'Marcar ingreso';
-                }
-              }).catch(()=>{ alert('Error de red'); btn.disabled=false; btn.textContent='Marcar ingreso'; });
+          .then(r=>r.json()).then(res=>{
+            if(res.success){
+              btn.classList.add('green');
+              btn.textContent = 'Ingresó';
+            } else {
+              alert('Error: ' + (res.data || ''));
+              btn.disabled = false;
+              btn.textContent = 'Ingresar';
+            }
+          }).catch(()=>{ 
+            alert('Error de red'); 
+            btn.disabled=false; 
+            btn.textContent='Ingresar'; 
           });
-        });
-      }
+      });
+    });
+  }
+  
+  // Manejar clicks en filas
+  function attachRowHandlers() {
+    document.querySelectorAll('.c8-clickable-row').forEach(row => {
+      row.addEventListener('click', function(e) {
+        // No abrir el enlace si se hizo click en un botón
+        if (e.target.tagName === 'BUTTON' || e.target.closest('button')) {
+          return;
+        }
+        const href = this.dataset.href;
+        if (href && href !== '#') {
+          window.location.href = href; // Redirige directamente en la misma pestaña
+        }
+      });
+    });
+  }
 
-      // initial load
-      loadList();
-    })();
-    </script>
+  // Event listeners
+  document.getElementById('c8_refresh').addEventListener('click', loadList);
+  document.getElementById('c8_q').addEventListener('keyup', function(e){ 
+    if(e.key === 'Enter') loadList(); 
+  });
+
+  // initial load
+  loadList();
+})();
+</script>
     <?php
     return ob_get_clean();
 });
@@ -500,48 +759,106 @@ add_action('wp_ajax_nopriv_c8ecm_list_ajax', 'c8ecm_list_ajax_handler');
 function c8ecm_list_ajax_handler(){
     $q = isset($_POST['q']) ? sanitize_text_field($_POST['q']) : '';
     $evento = isset($_POST['evento']) ? sanitize_text_field($_POST['evento']) : '';
-    $organizacion = isset($_POST['organizacion']) ? sanitize_text_field($_POST['organizacion']) : '';
     $mesa = isset($_POST['mesa']) ? sanitize_text_field($_POST['mesa']) : '';
 
-    $meta_query = [];
-    if ($organizacion) $meta_query[] = ['key'=>'c8_organizacion','value'=>$organizacion,'compare'=>'LIKE'];
-    if ($mesa) $meta_query[] = ['key'=>'c8_mesa','value'=>$mesa,'compare'=>'LIKE'];
-
-    $args = ['post_type'=>'invitado','posts_per_page'=>200,'s'=>$q,'meta_query'=>$meta_query];
+    $args = [
+        'post_type'=>'invitado',
+        'posts_per_page'=>200,
+        'meta_key' => 'c8_organizacion',
+        'orderby' => 'meta_value',
+        'order' => 'ASC',
+    ];
+    
+    // Búsqueda múltiple: ticket, nombre Y organización
+    if ($q) {
+        $args['meta_query'] = [
+            'relation' => 'OR',
+            ['key'=>'c8_ticket','value'=>$q,'compare'=>'LIKE'],     // Buscar en ticket
+            ['key'=>'c8_nombre','value'=>$q,'compare'=>'LIKE'],      // Buscar en nombre
+            ['key'=>'c8_organizacion','value'=>$q,'compare'=>'LIKE'] // Buscar en organización
+        ];
+    }
+    
+    // Búsqueda por mesa (coincidencia exacta)
+    if ($mesa) {
+        if (isset($args['meta_query'])) {
+            // Si ya existe meta_query, añadir la búsqueda por mesa
+            $args['meta_query'] = [
+                'relation' => 'AND',
+                $args['meta_query'],
+                ['key'=>'c8_mesa','value'=>$mesa,'compare'=>'=']
+            ];
+        } else {
+            $args['meta_query'] = [
+                ['key'=>'c8_mesa','value'=>$mesa,'compare'=>'=']
+            ];
+        }
+    }
+    
+    // Filtro por evento (si se especifica)
     if ($evento) {
         $args['tax_query'] = [[ 'taxonomy'=>'evento','field'=>'slug','terms'=>$evento ]];
     }
 
     $posts = get_posts($args);
-    if (!$posts) { echo '<p>No se encontraron invitados.</p>'; wp_die(); }
+    
+    if (!$posts) { 
+        echo '<p>No se encontraron invitados.</p>'; 
+        wp_die(); 
+    }
 
     echo '<table class="c8-list-table"><thead><tr><th>Ticket</th><th class="c8-field-nombre">Nombre</th><th class="c8-field-organizacion">Organización</th><th class="c8-field-mesa">Mesa</th><th>Evento</th><th>Check-in</th></tr></thead><tbody>';
     foreach($posts as $p){
         $nombre = get_post_meta($p->ID,'c8_nombre',true);
         $org = get_post_meta($p->ID,'c8_organizacion',true);
-        $mesa = get_post_meta($p->ID,'c8_mesa',true);
-        $terms = get_the_terms($p->ID,'evento');
+        $mesa_val = get_post_meta($p->ID,'c8_mesa',true);
+        $terms = c8ecm_get_evento_terms($p->ID);
         $evento_name = ($terms && !is_wp_error($terms)) ? $terms[0]->name : '';
         $check = get_post_meta($p->ID,'c8_checkin',true);
         $check_at = get_post_meta($p->ID,'c8_checkin_at',true);
         $check_by = get_post_meta($p->ID,'c8_checkin_by',true);
-        echo '<tr>';
-        echo '<td>'.esc_html($p->post_title).'</td>';
-        echo '<td class="c8-field-nombre">'.esc_html($nombre).'</td>';
-        echo '<td class="c8-field-organizacion">'.esc_html($org).'</td>';
-        echo '<td class="c8-field-mesa">'.esc_html($mesa).'</td>';
-        echo '<td class="c8-field-evento">'.esc_html($evento_name).'</td>';
+        $checkout = get_post_meta($p->ID,'c8_checkout',true);
+        $checkout_at = get_post_meta($p->ID,'c8_checkout_at',true);
+        
+        // Obtener el slug del evento para construir la URL
+        $evento_slug = $terms ? $terms[0]->slug : '';
+        $checkin_url = $evento_slug ? home_url("/{$evento_slug}/?ticket=" . $p->post_title) : '#';
+        
+        echo '<tr class="c8-clickable-row" data-href="' . esc_url($checkin_url) . '" style="cursor: pointer;">';
+        echo '<td><strong>' . esc_html($p->post_title) . '</strong></td>';
+        echo '<td class="c8-field-nombre">' . esc_html($nombre) . '</td>';
+        echo '<td class="c8-field-organizacion">' . esc_html($org) . '</td>';
+        echo '<td class="c8-field-mesa">' . esc_html($mesa_val) . '</td>';
+        echo '<td class="c8-field-evento">' . esc_html($evento_name) . '</td>';
         echo '<td>';
         if ($check) {
-            echo '<strong style="color:green">Ingresó</strong><br>'.esc_html($check_at).' '.esc_html($check_by);
+            if ($checkout) {
+                echo '<strong style="color:blue">🚪 Salió</strong><br><small>' . esc_html($checkout_at) . '</small>';
+            } else {
+                echo '<strong style="color:green">✅ Ingresó</strong><br><small>' . esc_html($check_at) . '</small>';
+                if ($check_by) {
+                    echo '<br><small style="color:#666">por: ' . esc_html($check_by) . '</small>';
+                }
+            }
         } else {
-            echo '<button class="c8-do-checkin c8-list-btn" data-id="'.esc_attr($p->ID).'">Marcar ingreso</button>';
+            echo '<button class="c8-do-checkin c8-list-btn" data-id="' . esc_attr($p->ID) . '">Ingresar</button>';
         }
         echo '</td>';
         echo '</tr>';
     }
     echo '</tbody></table>';
     wp_die();
+}
+
+// Función helper para buscar en el título
+function c8ecm_search_title_custom($where, $query) {
+    global $wpdb;
+    
+    if ($search_term = $query->get('s')) {
+        $where .= " OR {$wpdb->posts}.post_title LIKE '%" . esc_sql($wpdb->esc_like($search_term)) . "%'";
+    }
+    
+    return $where;
 }
 
 /* -----------------------
@@ -557,13 +874,25 @@ function c8ecm_import_export_page(){
     if (!current_user_can('manage_options')) wp_die('No autorizado');
     echo '<div class="wrap"><h1>Importar / Exportar Invitados</h1>';
 
-    // import form
+     // import form
     echo '<h2>Importar CSV</h2>';
     echo '<p>Formato CSV esperado (encabezado EXACTO): <code>titulo,nombre,organizacion,mesa,evento,observaciones,checkin</code></p>';
     echo '<form method="post" enctype="multipart/form-data">';
     wp_nonce_field('c8ecm_import_action','c8ecm_import_nonce');
     echo '<input type="file" name="c8ecm_csv" accept=".csv" required>';
     echo ' <label><input type="checkbox" name="update_existing"> Actualizar existentes (por título + evento)</label><br><br>';
+    
+    // Selector de separador
+    $separador = isset($_POST['separador']) ? $_POST['separador'] : ',';
+    echo '<label><strong>Separador CSV:</strong> ';
+    echo '<select name="separador">';
+    echo '<option value="," '.selected($separador, ',', false).'>Coma (,)</option>';
+    echo '<option value=";" '.selected($separador, ';', false).'>Punto y coma (;)</option>';
+    echo '<option value="|" '.selected($separador, '|', false).'>Pipe (|)</option>';
+    echo '<option value="tab" '.selected($separador, 'tab', false).'>Tabulador</option>';
+    echo '</select>';
+    echo '</label><br><br>';
+    
     submit_button('Importar Invitados', 'primary', 'c8ecm_do_import');
     echo '</form>';
 
@@ -573,12 +902,27 @@ function c8ecm_import_export_page(){
             echo '<div class="notice notice-error"><p>Nonce inválido</p></div>';
         } else if (!empty($_FILES['c8ecm_csv']['tmp_name'])) {
             $update_existing = isset($_POST['update_existing']);
+            $separador = isset($_POST['separador']) ? $_POST['separador'] : ',';
+            
+            // Convertir "tab" a carácter de tabulación real
+            if ($separador === 'tab') {
+                $separador = "\t";
+            }
+            
             $file = $_FILES['c8ecm_csv']['tmp_name'];
             $handle = fopen($file, 'r');
-            $header = fgetcsv($handle, 0, ',');
+            
+            // Detectar automáticamente el BOM UTF-8 y saltarlo si existe
+            $bom = fread($handle, 3);
+            if ($bom !== "\xEF\xBB\xBF") {
+                // Si no es BOM, rebobinar al inicio
+                rewind($handle);
+            }
+            
+            $header = fgetcsv($handle, 0, $separador);
             if (!$header) { echo '<div class="notice notice-error"><p>CSV inválido</p></div>'; return; }
             $count = 0; $skipped=0; $updated=0;
-            while (($row = fgetcsv($handle,0,',')) !== false) {
+            while (($row = fgetcsv($handle, 0, $separador)) !== false) {
                 if (count($row) !== count($header)) { $skipped++; continue; }
                 $data = array_combine($header, $row);
                 $titulo = sanitize_text_field($data['titulo'] ?? '');
@@ -590,17 +934,32 @@ function c8ecm_import_export_page(){
                 $observ = sanitize_textarea_field($data['observaciones'] ?? '');
                 $checkin_val = (isset($data['checkin']) && ($data['checkin'] === '1' || strtolower($data['checkin'])==='true')) ? 1 : 0;
 
-                // find existing by title & evento
-                $existing = get_page_by_title($titulo, OBJECT, 'invitado');
+                // Buscar invitado existente por título Y evento
                 $do_create = true;
-                if ($existing) {
-                    // check event match
-                    $terms = get_the_terms($existing->ID,'evento');
-                    $exists_same_event = false;
-                    if ($evento && $terms && !is_wp_error($terms)){
-                        foreach($terms as $t) if(sanitize_title($t->name) === sanitize_title($evento)) { $exists_same_event = true; break; }
-                    }
-                    if ($existing && $exists_same_event) {
+                $post_id = 0;
+                
+                // Primero buscar el término del evento
+                $evento_term = term_exists($evento, 'evento');
+                if ($evento_term) {
+                    $evento_term_id = is_array($evento_term) ? $evento_term['term_id'] : $evento_term;
+                    
+                    // Buscar posts que tengan el mismo título Y el mismo evento
+                    $existing_posts = get_posts(array(
+                        'post_type' => 'invitado',
+                        'title' => $titulo,
+                        'tax_query' => array(
+                            array(
+                                'taxonomy' => 'evento',
+                                'field' => 'term_id',
+                                'terms' => $evento_term_id
+                            )
+                        ),
+                        'numberposts' => 1,
+                        'post_status' => 'any'
+                    ));
+                    
+                    if (!empty($existing_posts)) {
+                        $existing = $existing_posts[0];
                         if ($update_existing) {
                             $post_id = $existing->ID;
                             $do_create = false;
@@ -618,6 +977,7 @@ function c8ecm_import_export_page(){
                 }
 
                 // update metas
+                update_post_meta($post_id,'c8_ticket',$titulo);
                 update_post_meta($post_id,'c8_nombre',$nombre);
                 update_post_meta($post_id,'c8_organizacion',$org);
                 update_post_meta($post_id,'c8_mesa',$mesa);
@@ -631,7 +991,9 @@ function c8ecm_import_export_page(){
                     if (!$term) $term = wp_insert_term($evento,'evento');
                     if (!is_wp_error($term)) {
                         $term_id = is_array($term) ? $term['term_id'] : $term;
-                        wp_set_object_terms($post_id, intval($term_id), 'evento', false);
+                        if (!empty($term_id)) {
+    						wp_set_object_terms($post_id, intval($term_id), 'evento', false);
+						}
                     }
                 }
 
@@ -652,35 +1014,66 @@ function c8ecm_import_export_page(){
     echo '</form>';
 
     if (isset($_POST['c8ecm_do_export'])) {
-        if (!isset($_POST['c8ecm_export_nonce']) || !wp_verify_nonce($_POST['c8ecm_export_nonce'],'c8ecm_export_action')) {
-            echo '<div class="notice notice-error"><p>Nonce inválido</p></div>';
-        } else {
-            $filename = 'invitados_export_'.date('Ymd').'.csv';
-            header('Content-Type: text/csv; charset=utf-8');
-            header('Content-Disposition: attachment; filename='.$filename);
-            $out = fopen('php://output','w');
-            fputcsv($out, ['titulo','nombre','organizacion','mesa','evento','observaciones','checkin']);
-            $q = new WP_Query(['post_type'=>'invitado','posts_per_page'=>-1,'post_status'=>'publish']);
-            while ($q->have_posts()) {
-                $q->the_post();
-                $id = get_the_ID();
-                $title = get_the_title();
-                $nombre = get_post_meta($id,'c8_nombre',true);
-                $org = get_post_meta($id,'c8_organizacion',true);
-                $mesa = get_post_meta($id,'c8_mesa',true);
-                $terms = get_the_terms($id,'evento');
-                $evento = ($terms && !is_wp_error($terms)) ? $terms[0]->name : '';
-                $observ = get_post_meta($id,'c8_observaciones',true);
-                $check = get_post_meta($id,'c8_checkin',true) ? '1' : '0';
-                fputcsv($out, [$title, $nombre, $org, $mesa, $evento, $observ, $check]);
-            }
-            wp_reset_postdata();
-            fclose($out);
-            exit;
-        }
-    }
+		if (!isset($_POST['c8ecm_export_nonce']) || !wp_verify_nonce($_POST['c8ecm_export_nonce'],'c8ecm_export_action')) {
+			echo '<div class="notice notice-error"><p>Nonce inválido</p></div>';
+		} else {
+			$filename = 'invitados_export_'.date('Ymd').'.csv';
+
+			// Limpiar cualquier salida previa y enviar headers
+			if (ob_get_level()) ob_end_clean();
+
+			header('Content-Type: text/csv; charset=utf-8');
+			header('Content-Disposition: attachment; filename='.$filename);
+			header('Pragma: no-cache');
+			header('Expires: 0');
+
+			$out = fopen('php://output','w');
+
+			// Agregar BOM para UTF-8 en Excel
+			fwrite($out, "\xEF\xBB\xBF");
+
+			fputcsv($out, ['titulo','nombre','organizacion','mesa','evento','observaciones','checkin']);
+
+			$q = new WP_Query([
+				'post_type'=>'invitado',
+				'posts_per_page'=>-1,
+				'post_status'=>'publish',
+				'orderby' => 'title',
+				'order' => 'ASC'
+			]);
+
+			while ($q->have_posts()) {
+				$q->the_post();
+				$id = get_the_ID();
+				$title = get_the_title();
+				$nombre = get_post_meta($id,'c8_nombre',true);
+				$org = get_post_meta($id,'c8_organizacion',true);
+				$mesa = get_post_meta($id,'c8_mesa',true);
+				$terms = c8ecm_get_evento_terms($id);
+				$evento = $terms ? $terms[0]->name : '';
+				$observ = get_post_meta($id,'c8_observaciones',true);
+				$check = get_post_meta($id,'c8_checkin',true) ? '1' : '0';
+				fputcsv($out, [$title, $nombre, $org, $mesa, $evento, $observ, $check]);
+			}
+
+			wp_reset_postdata();
+			fclose($out);
+			exit; // Importante: terminar la ejecución aquí
+		}
+	}
 
     echo '</div>';
+}
+
+/* -----------------------
+   Helper function para obtener eventos de forma segura
+   ----------------------- */
+function c8ecm_get_evento_terms($post_id) {
+    $terms = get_the_terms($post_id, 'evento');
+    if ($terms && !is_wp_error($terms) && !empty($terms)) {
+        return $terms;
+    }
+    return false;
 }
 
 /* -----------------------
