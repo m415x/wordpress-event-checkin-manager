@@ -3,7 +3,7 @@
  * Plugin Name: Código8 – Event Check-in Manager
  * Description: Sistema completo de gestión de invitados con check-in/check-out por QR, múltiples eventos, importación/exportación CSV y control de acceso por roles.
  * Plugin URI: https://codigo8.com/download/event-checkin-manager/
- * Version: 2.2.0
+ * Version: 2.2.1
  * Author: Código8
  * Author URI: https://codigo8.com
  * Requires PHP: 7.4

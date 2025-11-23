@@ -4,7 +4,7 @@ Donate link: https://codigo8.com
 Tags: eventos, check-in, check-out, invitados, qr, csv, organizacion, gestión de eventos, attendance, guest management
 Requires at least: 5.8
 Tested up to: 6.8
-Stable tag: 2.2.0
+Stable tag: 2.2.1
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -13,7 +13,7 @@ Sistema completo para la gestión de invitados con control de acceso mediante QR
 
 == Descripción ==
 
-**Código8 – Event Check-in Manager v2.2.0** es un sistema profesional y robusto para la gestión completa de invitados en eventos. Diseñado específicamente para eventos empresariales, institucionales y sociales que requieren control de acceso preciso y en tiempo real.
+**Código8 – Event Check-in Manager v2.2.1** es un sistema profesional y robusto para la gestión completa de invitados en eventos. Diseñado específicamente para eventos empresariales, institucionales y sociales que requieren control de acceso preciso y en tiempo real.
 
 **🚀 Características Principales:**
 
@@ -146,6 +146,9 @@ Cada invitado incluye los siguientes campos:
 
 == Changelog ==
 
+= 2.2.1 =
+- **NUEVO**: Forzar UTF-8 al importar CSV
+
 = 2.2.0 =
 - **REFACTOR**: Reestructuración completa del código en arquitectura modular
 - **NUEVO**: Sistema nativo de generación de códigos QR
@@ -205,7 +208,7 @@ Podés elegir el separador (coma, punto y coma, pipe o tabulador) durante la imp
 Podés usar los shortcodes [c8ecm_qr_table] para generar tablas completas o [c8ecm_qr_single] para QR individuales. Las URLs siguen el formato: `https://tudominio.com/slug-evento/?ticket=NUMERO`
 
 = ¿El plugin requiere algún servicio externo para los QR? =
-No, la versión 2.2.0 incluye generación nativa de QR usando Google Charts API, sin dependencias externas ni plugins adicionales.
+No, la versión 2.2.1 incluye generación nativa de QR usando Google Charts API, sin dependencias externas ni plugins adicionales.
 
 = ¿Puedo personalizar el diseño de las tablas? =
 Sí, todos los elementos tienen clases CSS específicas que podés sobrescribir en tu tema. Consultá la sección de Campos Personalizados para ver las clases disponibles.

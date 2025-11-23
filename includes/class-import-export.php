@@ -132,6 +132,11 @@ class C8ECM_Import_Export {
         $separador = $this->get_csv_separator();
         $file = $_FILES['c8ecm_csv']['tmp_name'];
         
+        // Convertir archivo completo a UTF-8 (a prueba de Excel)
+        $raw = file_get_contents($file);
+        $raw = $this->c8_force_utf8($raw);
+        file_put_contents($file, $raw);
+
         $handle = fopen($file, 'r');
         if (!$handle) {
             echo '<div class="notice notice-error"><p>Error abriendo archivo CSV</p></div>';
@@ -168,6 +173,9 @@ class C8ECM_Import_Export {
                 continue;
             }
             
+            $row = array_map(array($this, 'c8_force_utf8'), $row);
+            $header = array_map(array($this, 'c8_force_utf8'), $header);
+
             $data = array_combine($header, $row);
             $result = $this->process_single_row($data, $update_existing);
             
@@ -350,5 +358,27 @@ class C8ECM_Import_Export {
     private function get_csv_separator() {
         $separador = isset($_POST['separador']) ? $_POST['separador'] : ',';
         return ($separador === 'tab') ? "\t" : $separador;
+    }
+
+    private function c8_force_utf8($string) {
+        // Si ya está en UTF-8 válido, no tocamos nada
+        if (mb_detect_encoding($string, 'UTF-8', true)) {
+            return $string;
+        }
+
+        // Intentar CP1252 (Windows / Excel)
+        $converted = @iconv('CP1252', 'UTF-8//IGNORE', $string);
+        if ($converted !== false) {
+            return $converted;
+        }
+
+        // Intentar ISO-8859-1
+        $converted = @iconv('ISO-8859-1', 'UTF-8//IGNORE', $string);
+        if ($converted !== false) {
+            return $converted;
+        }
+
+        // Fallback final
+        return mb_convert_encoding($string, 'UTF-8', 'auto');
     }
 }
